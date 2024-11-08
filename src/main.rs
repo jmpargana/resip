@@ -1,5 +1,47 @@
 #![allow(unused_imports)]
+use pest::{iterators::Pair, Parser};
+use pest_derive::Parser;
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
+
+#[derive(Parser)]
+#[grammar = "resp.pest"]
+pub struct RESPParser;
+
+#[derive(Debug, PartialEq)]
+enum ArrayEntry {
+    Int(i32),
+    Text(String),
+    Array(Vec<ArrayEntry>),
+}
+
+fn extract_string_value(pair: Pair<Rule>) -> &str {
+    pair.into_inner()
+        .find(|p| p.as_rule() == Rule::text)
+        .expect("Expected at least one string")
+        .as_str()
+}
+
+// Helper function to extract the integer from a `Pair` for `int`
+fn extract_int_value(pair: Pair<Rule>) -> i32 {
+    pair.into_inner()
+        .next()
+        .expect("Expected number after ':'")
+        .as_str()
+        .parse::<i32>()
+        .expect("failed to parse number")
+}
+
+fn extract_array_entries(pair: Pair<Rule>) -> Vec<ArrayEntry> {
+    pair.into_inner()
+        .filter_map(|p| match p.as_rule() {
+            Rule::int => Some(ArrayEntry::Int(extract_int_value(p))),
+            Rule::string => Some(ArrayEntry::Text(extract_string_value(p).to_string())),
+            Rule::array => Some(ArrayEntry::Array(extract_array_entries(p))),
+            _ => None,
+        })
+        .collect()
+}
 
 fn main() {
     println!("Logs from your program will appear here!");
@@ -8,12 +50,97 @@ fn main() {
 
     for stream in listener.incoming() {
         match stream {
-            Ok(_stream) => {
-                println!("accepted new connection");
+            Ok(mut _stream) => {
+                let mut reader =
+                    BufReader::new(_stream.try_clone().expect("failed to copy stream"));
+                let mut writer = _stream;
+
+                loop {
+                    let mut buffer = Vec::new();
+
+                    match reader.read_until(b'\n', &mut buffer) {
+                        Ok(0) => {
+                            break;
+                        }
+                        Ok(_) => {
+                            let input = String::from_utf8_lossy(&buffer);
+
+                            if input.trim() == "PING" {
+                                writer.write_all(b"+PONG\r\n").expect("failed to write");
+                                writer.flush().expect("failed flushing");
+                            }
+                        }
+                        Err(e) => {
+                            println!("failed reading");
+                            break;
+                        }
+                    }
+                }
             }
             Err(e) => {
                 println!("error: {}", e);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn can_parse_int() {
+        let input = ":123\r\n";
+        let expected = 123;
+        let actual = RESPParser::parse(Rule::int, input)
+            .expect("failed to parse input")
+            .next()
+            .expect("expected a single pair");
+
+        assert_eq!(extract_int_value(actual), expected);
+    }
+
+    #[test]
+    fn can_parse_string() {
+        let input = "$3\r\nhey\r\n";
+        let expected = "hey";
+        let actual = RESPParser::parse(Rule::string, input)
+            .expect("failed to parse input")
+            .next()
+            .expect("expected a single pair");
+
+        assert_eq!(extract_string_value(actual), expected);
+    }
+
+    #[test]
+    fn can_parse_array() {
+        let input = "*2\r\n:2\r\n$5\r\nthree\r\n";
+        let expected = vec![ArrayEntry::Int(2), ArrayEntry::Text("three".to_string())];
+        let actual = RESPParser::parse(Rule::array, input)
+            .expect("failed to parse input")
+            .next()
+            .expect("expected a single pair");
+
+        let entries = extract_array_entries(actual);
+
+        assert_eq!(entries, expected);
+    }
+
+    #[test]
+    fn can_parse_array_recursively() {
+        let input = "*2\r\n:2\r\n$5\r\nthree\r\n*1\r\n:4\r\n";
+        let expected = vec![
+            ArrayEntry::Int(2),
+            ArrayEntry::Text("three".to_string()),
+            ArrayEntry::Array(vec![ArrayEntry::Int(4)]),
+        ];
+        let actual = RESPParser::parse(Rule::array, input)
+            .expect("failed to parse input")
+            .next()
+            .expect("expected a single pair");
+
+        let entries = extract_array_entries(actual);
+
+        assert_eq!(entries, expected);
     }
 }
