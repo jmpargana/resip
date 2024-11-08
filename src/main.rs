@@ -71,7 +71,7 @@ fn main() {
                             }
                         }
                         Err(e) => {
-                            println!("failed reading");
+                            println!("failed reading, {}", e);
                             break;
                         }
                     }
