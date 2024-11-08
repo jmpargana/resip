@@ -10,25 +10,42 @@ use tokio::{
 async fn handle_client(mut _stream: TcpStream) {
     let (reader, mut writer) = _stream.into_split();
     let mut reader = BufReader::new(reader);
+    let mut msg: Vec<String> = vec![];
+    let mut found_echo = false;
+    let mut echo_index = 0;
 
     loop {
-        let mut buffer = Vec::new();
+        let mut buffer = String::new();
 
-        match reader.read_until(b'\n', &mut buffer).await {
+        match reader.read_line(&mut buffer).await {
             Ok(0) => {
                 println!("client disconnected");
                 break;
             }
             Ok(_) => {
-                let input = String::from_utf8_lossy(&buffer);
-
-                if input.trim() == "PING" {
-                    let _ = writer.write_all(b"+PONG\r\n").await;
-                }
+                msg.push(buffer);
             }
             Err(e) => {
                 println!("failed reading, {}", e);
                 break;
+            }
+        }
+
+        while let Some(m) = msg.pop() {
+            if m == "PING\r\n" {
+                writer.write_all(b"+PONG\r\n").await;
+                writer.flush().await;
+            }
+            if m == "ECHO\r\n" {
+                found_echo = true;
+            }
+            if found_echo {
+                echo_index += 1;
+            }
+            if found_echo && echo_index == 3 {
+                let resp = format!("+{}", m);
+                writer.write_all(resp.as_bytes()).await;
+                writer.flush().await;
             }
         }
     }
@@ -108,5 +125,25 @@ mod tests {
 
             assert_eq!(response.trim(), "+PONG", "Expected response to be +PONG");
         }
+    }
+
+    #[tokio::test]
+    async fn test_reply_to_echo() {
+        thread::spawn(|| {
+            main(); // Start server in separate thread
+        });
+
+        sleep(Duration::from_millis(100)).await;
+
+        let mut client = TcpStream::connect("127.0.0.1:6379").expect("failed to connect");
+        client
+            .write_all(b"*2\r\n$4\r\nECHO\r\n$3\r\nhey\r\n")
+            .expect("failed to write");
+
+        let mut reader = BufReader::new(client);
+        let mut response = String::new();
+        reader.read_line(&mut response).expect("Failed to read");
+
+        assert_eq!(response, "+hey\r\n");
     }
 }
