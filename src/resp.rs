@@ -7,7 +7,7 @@ pub struct RESPParser;
 
 #[derive(Debug, PartialEq)]
 pub enum ArrayEntry {
-    // Int(i32),
+    Int(i32),
     Text(String),
     // Array(Vec<ArrayEntry>),
 }
@@ -19,20 +19,20 @@ pub fn extract_string_value(pair: Pair<Rule>) -> &str {
         .as_str()
 }
 
-// // Helper function to extract the integer from a `Pair` for `int`
-// pub fn extract_int_value(pair: Pair<Rule>) -> i32 {
-//     pair.into_inner()
-//         .next()
-//         .expect("Expected number after ':'")
-//         .as_str()
-//         .parse::<i32>()
-//         .expect("failed to parse number")
-// }
+// Helper function to extract the integer from a `Pair` for `int`
+pub fn extract_int_value(pair: Pair<Rule>) -> i32 {
+    pair.into_inner()
+        .next()
+        .expect("Expected number after ':'")
+        .as_str()
+        .parse::<i32>()
+        .expect("failed to parse number")
+}
 
 pub fn extract_array_entries(pair: Pair<Rule>) -> Vec<ArrayEntry> {
     pair.into_inner()
         .filter_map(|p| match p.as_rule() {
-            // Rule::int => Some(ArrayEntry::Int(extract_int_value(p))),
+            Rule::int => Some(ArrayEntry::Int(extract_int_value(p))),
             Rule::string => Some(ArrayEntry::Text(extract_string_value(p).to_string())),
             // Rule::array => Some(ArrayEntry::Array(extract_array_entries(p))),
             _ => None,

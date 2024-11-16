@@ -1,11 +1,15 @@
 use std::{
     error::Error,
     fmt::{Display, Formatter},
+    time::{Duration, Instant},
 };
 
 use async_trait::async_trait;
 
-use crate::{resp::ArrayEntry, storage::Storage};
+use crate::{
+    resp::ArrayEntry,
+    storage::{Storage, Value},
+};
 
 #[derive(Debug, Clone)]
 pub struct CommandError;
@@ -27,33 +31,76 @@ pub struct CommandParser;
 
 impl CommandParser {
     pub fn new(args: Vec<ArrayEntry>) -> Result<Box<dyn Command>, CommandError> {
-        let ArrayEntry::Text(cmd) = args.first().unwrap();
-        let cmd_kind: Box<dyn Command> = match cmd.as_str() {
-            "PING" => Box::new(PingCommand {}),
-            "ECHO" => Box::new(EchoCommand {
-                args: args[1..]
-                    .iter()
-                    .map(|ArrayEntry::Text(it)| it.clone())
-                    .collect(),
-            }),
-            "GET" => Box::new(GetCommand {
-                key: args
-                    .get(1)
-                    .map(|ArrayEntry::Text(cmd)| cmd.to_string())
-                    .unwrap(),
-            }),
-            "SET" => Box::new(SetCommand {
-                key: args
-                    .get(1)
-                    .map(|ArrayEntry::Text(cmd)| cmd.to_string())
-                    .unwrap(),
-                value: args
-                    .get(2)
-                    .map(|ArrayEntry::Text(cmd)| cmd.to_string())
-                    .unwrap(),
-            }),
-            _ => return Err(CommandError),
+        // Extract the first argument (command name)
+        let cmd = match args.first() {
+            Some(ArrayEntry::Text(cmd)) => cmd.as_str(),
+            _ => return Err(CommandError), // Return an error if the command name is missing or invalid
         };
+
+        // Match the command name to create the corresponding command
+        let cmd_kind: Box<dyn Command> = match cmd {
+            "PING" => Box::new(PingCommand {}),
+
+            "ECHO" => {
+                let echo_args = args
+                    .iter()
+                    .skip(1)
+                    .filter_map(|entry| match entry {
+                        ArrayEntry::Text(text) => Some(text.clone()),
+                        _ => None, // Skip non-text arguments
+                    })
+                    .collect();
+
+                Box::new(EchoCommand { args: echo_args })
+            }
+
+            "GET" => {
+                let key = args
+                    .get(1)
+                    .and_then(|entry| match entry {
+                        ArrayEntry::Text(text) => Some(text.to_string()),
+                        _ => None,
+                    })
+                    .ok_or(CommandError)?; // Return an error if key is missing or invalid
+
+                Box::new(GetCommand { key })
+            }
+
+            "SET" => {
+                let key = args
+                    .get(1)
+                    .and_then(|entry| match entry {
+                        ArrayEntry::Text(text) => Some(text.to_string()),
+                        _ => None,
+                    })
+                    .ok_or(CommandError)?;
+
+                let value = args
+                    .get(2)
+                    .and_then(|entry| match entry {
+                        ArrayEntry::Text(text) => Some(text.to_string()),
+                        _ => None,
+                    })
+                    .ok_or(CommandError)?;
+
+                let expiry = if args.len() == 5 {
+                    args.get(4).and_then(|entry| match entry {
+                        ArrayEntry::Text(number) => {
+                            let number = number.parse::<u64>().expect("could not parse number");
+                            Some(Instant::now() + Duration::from_millis(number))
+                        }
+                        _ => None,
+                    })
+                } else {
+                    None
+                };
+
+                Box::new(SetCommand { key, value, expiry })
+            }
+
+            _ => return Err(CommandError), // Unknown command
+        };
+
         Ok(cmd_kind)
     }
 }
@@ -68,7 +115,7 @@ impl Command for GetCommand {
         println!("GET was called");
         match storage.get(&self.key).await {
             Some(value) => {
-                let msg = format!("+{}\r\n", value);
+                let msg = format!("+{}\r\n", value.value);
                 Ok(msg)
             }
             None => Ok("$-1\r\n".to_string()),
@@ -104,12 +151,21 @@ impl Command for EchoCommand {
 pub struct SetCommand {
     key: String,
     value: String,
+    expiry: Option<Instant>,
 }
 
 #[async_trait]
 impl Command for SetCommand {
     async fn execute(&self, storage: &dyn Storage) -> Result<String, CommandError> {
-        storage.set(self.key.clone(), self.value.clone()).await;
+        storage
+            .set(
+                self.key.clone(),
+                Value {
+                    value: self.value.clone(),
+                    expiry: self.expiry,
+                },
+            )
+            .await;
         Ok("+OK\r\n".to_string())
     }
 }
