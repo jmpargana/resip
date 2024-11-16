@@ -7,7 +7,7 @@ use std::{
 use async_trait::async_trait;
 
 use crate::{
-    resp::ArrayEntry,
+    resp::{Array, Entry},
     storage::{Storage, Value},
 };
 
@@ -27,13 +27,22 @@ pub trait Command: Send + Sync {
     async fn execute(&self, storage: &dyn Storage) -> Result<String, CommandError>;
 }
 
+fn parse_arg(args: &[Entry], at: usize) -> Result<String, CommandError> {
+    args.get(at)
+        .and_then(|entry| match entry {
+            Entry::Text(text) => Some(text.to_string()),
+            _ => None,
+        })
+        .ok_or(CommandError)
+}
+
 pub struct CommandParser;
 
 impl CommandParser {
-    pub fn new(args: Vec<ArrayEntry>) -> Result<Box<dyn Command>, CommandError> {
+    pub fn new(args: &[Entry]) -> Result<Box<dyn Command>, CommandError> {
         // Extract the first argument (command name)
         let cmd = match args.first() {
-            Some(ArrayEntry::Text(cmd)) => cmd.as_str(),
+            Some(Entry::Text(cmd)) => cmd.as_str(),
             _ => return Err(CommandError), // Return an error if the command name is missing or invalid
         };
 
@@ -46,7 +55,7 @@ impl CommandParser {
                     .iter()
                     .skip(1)
                     .filter_map(|entry| match entry {
-                        ArrayEntry::Text(text) => Some(text.clone()),
+                        Entry::Text(text) => Some(text.clone()),
                         _ => None, // Skip non-text arguments
                     })
                     .collect();
@@ -54,38 +63,17 @@ impl CommandParser {
                 Box::new(EchoCommand { args: echo_args })
             }
 
-            "GET" => {
-                let key = args
-                    .get(1)
-                    .and_then(|entry| match entry {
-                        ArrayEntry::Text(text) => Some(text.to_string()),
-                        _ => None,
-                    })
-                    .ok_or(CommandError)?; // Return an error if key is missing or invalid
-
-                Box::new(GetCommand { key })
-            }
+            "GET" => Box::new(GetCommand {
+                key: parse_arg(args, 1)?,
+            }),
 
             "SET" => {
-                let key = args
-                    .get(1)
-                    .and_then(|entry| match entry {
-                        ArrayEntry::Text(text) => Some(text.to_string()),
-                        _ => None,
-                    })
-                    .ok_or(CommandError)?;
-
-                let value = args
-                    .get(2)
-                    .and_then(|entry| match entry {
-                        ArrayEntry::Text(text) => Some(text.to_string()),
-                        _ => None,
-                    })
-                    .ok_or(CommandError)?;
+                let key = parse_arg(args, 1)?;
+                let value = parse_arg(args, 2)?;
 
                 let expiry = if args.len() == 5 {
                     args.get(4).and_then(|entry| match entry {
-                        ArrayEntry::Text(number) => {
+                        Entry::Text(number) => {
                             let number = number.parse::<u64>().expect("could not parse number");
                             Some(Instant::now() + Duration::from_millis(number))
                         }
@@ -96,6 +84,11 @@ impl CommandParser {
                 };
 
                 Box::new(SetCommand { key, value, expiry })
+            }
+
+            "CONFIG" => {
+                let key = parse_arg(args, 2)?;
+                Box::new(ConfigGetCommand { key })
             }
 
             _ => return Err(CommandError), // Unknown command
@@ -112,13 +105,12 @@ pub struct GetCommand {
 #[async_trait]
 impl Command for GetCommand {
     async fn execute(&self, storage: &dyn Storage) -> Result<String, CommandError> {
-        println!("GET was called");
         match storage.get(&self.key).await {
             Some(value) => {
-                let msg = format!("+{}\r\n", value.value);
-                Ok(msg)
+                let msg = Entry::SimpleText(value.value.to_string());
+                Ok(msg.to_string())
             }
-            None => Ok("$-1\r\n".to_string()),
+            None => Ok(Entry::Nil.to_string()),
         }
     }
 }
@@ -128,8 +120,7 @@ pub struct PingCommand;
 #[async_trait]
 impl Command for PingCommand {
     async fn execute(&self, _: &dyn Storage) -> Result<String, CommandError> {
-        println!("PING was called");
-        Ok(String::from("+PONG\r\n"))
+        Ok(Entry::SimpleText("PONG".to_string()).to_string())
     }
 }
 
@@ -141,9 +132,8 @@ pub struct EchoCommand {
 #[async_trait]
 impl Command for EchoCommand {
     async fn execute(&self, _: &dyn Storage) -> Result<String, CommandError> {
-        println!("ECHO was called: {:?}", self);
-        let msg = format!("+{}\r\n", self.args.join("\r\n"));
-        Ok(msg)
+        let msg = Entry::SimpleText(self.args.join("\r\n"));
+        Ok(msg.to_string())
     }
 }
 
@@ -166,6 +156,26 @@ impl Command for SetCommand {
                 },
             )
             .await;
-        Ok("+OK\r\n".to_string())
+        Ok(Entry::SimpleText("OK".to_string()).to_string())
+    }
+}
+
+pub struct ConfigGetCommand {
+    key: String,
+}
+
+#[async_trait]
+impl Command for ConfigGetCommand {
+    async fn execute(&self, storage: &dyn Storage) -> Result<String, CommandError> {
+        match storage.get(&self.key).await {
+            Some(value) => {
+                let msg = Array(vec![
+                    Entry::Text(self.key.clone()),
+                    Entry::Text(value.value),
+                ]);
+                Ok(msg.to_string())
+            }
+            None => Ok(Entry::Nil.to_string()),
+        }
     }
 }

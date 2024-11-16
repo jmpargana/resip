@@ -6,10 +6,34 @@ use pest_derive::Parser;
 pub struct RESPParser;
 
 #[derive(Debug, PartialEq)]
-pub enum ArrayEntry {
+pub enum Entry {
     Int(i32),
     Text(String),
-    // Array(Vec<ArrayEntry>),
+    SimpleText(String),
+    Nil,
+}
+
+impl ToString for Entry {
+    fn to_string(&self) -> String {
+        match self {
+            Entry::Text(text) => format!("${}\r\n{}\r\n", text.len(), text),
+            Entry::SimpleText(text) => format!("+{}\r\n", text),
+            Entry::Int(text) => format!(":{}\r\n", text),
+            Entry::Nil => format!("$-1\r\n"),
+        }
+    }
+}
+
+pub struct Array(pub Vec<Entry>);
+
+impl ToString for Array {
+    fn to_string(&self) -> String {
+        let mut result = format!("*{}\r\n", self.0.len());
+        for entry in self.0.iter() {
+            result.push_str(&entry.to_string());
+        }
+        result
+    }
 }
 
 pub fn extract_string_value(pair: Pair<Rule>) -> &str {
@@ -29,11 +53,11 @@ pub fn extract_int_value(pair: Pair<Rule>) -> i32 {
         .expect("failed to parse number")
 }
 
-pub fn extract_array_entries(pair: Pair<Rule>) -> Vec<ArrayEntry> {
+pub fn extract_array_entries(pair: Pair<Rule>) -> Vec<Entry> {
     pair.into_inner()
         .filter_map(|p| match p.as_rule() {
-            Rule::int => Some(ArrayEntry::Int(extract_int_value(p))),
-            Rule::string => Some(ArrayEntry::Text(extract_string_value(p).to_string())),
+            Rule::int => Some(Entry::Int(extract_int_value(p))),
+            Rule::string => Some(Entry::Text(extract_string_value(p).to_string())),
             // Rule::array => Some(ArrayEntry::Array(extract_array_entries(p))),
             _ => None,
         })
@@ -71,7 +95,7 @@ mod tests {
     #[test]
     fn can_parse_array() {
         let input = "*2\r\n:2\r\n$5\r\nthree\r\n";
-        let expected = vec![ArrayEntry::Int(2), ArrayEntry::Text("three".to_string())];
+        let expected = vec![Entry::Int(2), Entry::Text("three".to_string())];
         let actual = RESPParser::parse(Rule::array, input)
             .expect("failed to parse input")
             .next()
@@ -86,9 +110,9 @@ mod tests {
     fn can_parse_array_recursively() {
         let input = "*2\r\n:2\r\n$5\r\nthree\r\n*1\r\n:4\r\n";
         let expected = vec![
-            ArrayEntry::Int(2),
-            ArrayEntry::Text("three".to_string()),
-            ArrayEntry::Array(vec![ArrayEntry::Int(4)]),
+            Entry::Int(2),
+            Entry::Text("three".to_string()),
+            Entry::Array(vec![Entry::Int(4)]),
         ];
         let actual = RESPParser::parse(Rule::array, input)
             .expect("failed to parse input")

@@ -38,7 +38,7 @@ impl Server {
 
                         let entries = extract_array_entries(result);
 
-                        let cmd = match CommandParser::new(entries) {
+                        let cmd = match CommandParser::new(&entries) {
                             Ok(command) => command,
                             Err(_) => {
                                 connection

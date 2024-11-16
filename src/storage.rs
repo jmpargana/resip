@@ -34,15 +34,11 @@ impl Storage for InMemoryStorage {
 
     async fn get(&self, key: &str) -> Option<Value> {
         let value = self.map.read().await.get(key)?.clone();
-
-        println!("value found {:?}", value);
-
         if let Some(expiry) = value.expiry {
             if Instant::now() > expiry {
                 return None;
             }
         }
-
         Some(value)
     }
 }
