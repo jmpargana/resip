@@ -4,6 +4,7 @@ use std::{
     fs::{create_dir_all, File},
     io::{self, Read, Write},
     path::Path,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
@@ -19,10 +20,10 @@ struct RdbHeader {
 struct RdbEntry {
     key: String,
     value: String,
+    expiry: Option<Instant>,
 }
 
 fn parse_rdb_header(buffer: &mut Bytes) -> Result<RdbHeader, String> {
-    println!("buffer: {:?}", buffer);
     // "REDIS" + 4 bytes for version
     if buffer.remaining() < 9 {
         return Err("File too short".into());
@@ -46,7 +47,15 @@ fn parse_rdb_entry(buffer: &mut Bytes) -> Result<Option<RdbEntry>, String> {
         return Ok(None); // EOF marker
     }
     match data_type {
-        0x00 => parse_rdb_string(buffer),
+        0x00 => parse_rdb_string(buffer, None),
+        0xFD => {
+            let expiry = parse_expiry(buffer, true)?;
+            parse_rdb_string(buffer, expiry)
+        }
+        0xFC => {
+            let expiry = parse_expiry(buffer, false)?;
+            parse_rdb_string(buffer, expiry)
+        }
         _ => Err("unknown data type".into()),
     }
 }
@@ -75,7 +84,6 @@ fn parse_rbd_database_start(buffer: &mut Bytes) -> Result<(), String> {
 }
 
 fn parse_string(buffer: &mut Bytes) -> Result<String, String> {
-    println!("reading string {:?}", buffer);
     let str_len = buffer.get_u8();
     if buffer.remaining() < str_len as usize {
         return Err("File truncated while reading key".into());
@@ -84,10 +92,13 @@ fn parse_string(buffer: &mut Bytes) -> Result<String, String> {
     Ok(String::from_utf8_lossy(str_bytes.as_ref()).to_string())
 }
 
-fn parse_rdb_string(buffer: &mut Bytes) -> Result<Option<RdbEntry>, String> {
+fn parse_rdb_string(
+    buffer: &mut Bytes,
+    expiry: Option<Instant>,
+) -> Result<Option<RdbEntry>, String> {
     let key = parse_string(buffer)?;
     let value = parse_string(buffer)?;
-    Ok(Some(RdbEntry { key, value }))
+    Ok(Some(RdbEntry { key, value, expiry }))
 }
 
 pub fn parse_rdb_file(_fn: &str) -> Result<HashMap<String, Value>, Box<dyn Error>> {
@@ -125,7 +136,7 @@ pub fn parse_rdb_file(_fn: &str) -> Result<HashMap<String, Value>, Box<dyn Error
                     entry.key,
                     Value {
                         value: entry.value,
-                        expiry: None,
+                        expiry: entry.expiry,
                     },
                 );
             }
@@ -172,6 +183,26 @@ fn write_rdb_string(buf: &mut BytesMut, k: &str) {
     let key_len = k.len() as u8;
     buf.put_u8(key_len);
     buf.extend_from_slice(k.as_bytes());
+}
+
+fn parse_expiry(buf: &mut Bytes, seconds: bool) -> Result<Option<Instant>, String> {
+    let system_time = if seconds {
+        let expiry_bytes = buf.split_to(4);
+        let expiry_timestamp = u32::from_le_bytes(expiry_bytes[..].try_into().unwrap()) as u64;
+        UNIX_EPOCH + Duration::from_secs(expiry_timestamp)
+    } else {
+        let expiry_bytes = buf.split_to(8); // Extracts the first 8 bytes
+        let expiry_timestamp = u64::from_le_bytes(expiry_bytes[..].try_into().unwrap());
+        UNIX_EPOCH + Duration::from_millis(expiry_timestamp)
+    };
+
+    buf.get_u8();
+
+    let now = SystemTime::now();
+    match system_time.duration_since(now) {
+        Ok(duration) => Ok(Some(Instant::now() + duration)),
+        Err(_) => Ok(Some(Instant::now() - Duration::from_secs(1))),
+    }
 }
 
 mod tests {
