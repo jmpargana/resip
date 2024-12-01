@@ -16,6 +16,8 @@ struct Args {
     dir: Option<String>,
     #[arg(long)]
     dbfilename: Option<String>,
+    #[arg(long, default_value_t = 6379)]
+    port: u32,
 }
 
 #[tokio::main]
@@ -42,6 +44,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
 
     let server = Server::new(storage);
-    server.run("127.0.0.1:6379").await.expect("Server failed");
+    server
+        .run(&format!("127.0.0.1:{}", args.port))
+        .await
+        .expect("Server failed");
     Ok(())
 }
