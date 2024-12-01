@@ -1,5 +1,6 @@
 mod command;
 mod connection;
-mod resp;
+mod rdb;
+pub mod resp;
 pub mod server;
 pub mod storage;

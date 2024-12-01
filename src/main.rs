@@ -1,30 +1,47 @@
-use std::env;
+use std::error::Error;
 use std::sync::Arc;
+use std::time::Duration;
 
+use clap::Parser;
 use redis_starter_rust::server::Server;
-use redis_starter_rust::storage::{InMemoryStorage, Storage, Value};
+use redis_starter_rust::storage::{InMemoryStorage, RdbStorage, Storage};
+use tokio::sync::Mutex;
+use tokio::task;
+use tokio::time::sleep;
+
+#[derive(Parser, Debug)]
+// #[command(version, about, long_about = None)]
+struct Args {
+    #[arg(long)]
+    dir: Option<String>,
+    #[arg(long)]
+    dbfilename: Option<String>,
+}
 
 #[tokio::main]
-async fn main() {
-    let storage = InMemoryStorage::new();
+async fn main() -> Result<(), Box<dyn Error>> {
+    let args = Args::parse();
 
-    let args: Vec<String> = env::args().skip(1).collect();
-    let mut args_iter = args.iter();
-    while let Some(s) = args_iter.next() {
-        if let Some(value) = args_iter.next() {
-            let key_trimmed = s.trim_start_matches("--");
-            storage
-                .set(
-                    key_trimmed.to_string(),
-                    Value {
-                        value: value.to_string(),
-                        expiry: None,
-                    },
-                )
-                .await;
-        }
-    }
+    let storage: Arc<Mutex<dyn Storage>> = if args.dir == None || args.dbfilename == None {
+        let storage = InMemoryStorage::new();
+        Arc::new(Mutex::new(storage))
+    } else {
+        let mut storage = RdbStorage::new(&args.dir.unwrap(), &args.dbfilename.unwrap());
+        storage.load().await.unwrap();
+        let storage = Arc::new(Mutex::new(storage));
+        let storage_clone = Arc::clone(&storage);
 
-    let server = Server::new(Arc::new(storage));
+        task::spawn(async move {
+            loop {
+                let _ = sleep(Duration::from_secs(60));
+                let storage_guard = storage.lock().await;
+                let _ = storage_guard.save().await;
+            }
+        });
+        storage_clone
+    };
+
+    let server = Server::new(storage);
     server.run("127.0.0.1:6379").await.expect("Server failed");
+    Ok(())
 }

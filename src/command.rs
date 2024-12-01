@@ -91,6 +91,13 @@ impl CommandParser {
                 Box::new(ConfigGetCommand { key })
             }
 
+            "SAVE" => Box::new(SaveCommand),
+
+            "KEYS" => {
+                let key = parse_arg(args, 1)?;
+                Box::new(KeysCommand { key })
+            }
+
             _ => return Err(CommandError), // Unknown command
         };
 
@@ -167,15 +174,47 @@ pub struct ConfigGetCommand {
 #[async_trait]
 impl Command for ConfigGetCommand {
     async fn execute(&self, storage: &dyn Storage) -> Result<String, CommandError> {
-        match storage.get(&self.key).await {
-            Some(value) => {
+        let config = storage.config().await;
+        match self.key.as_str() {
+            "dir" => {
                 let msg = Array(vec![
-                    Entry::Text(self.key.clone()),
-                    Entry::Text(value.value),
+                    Entry::Text(self.key.to_string()),
+                    Entry::Text(config.dir),
                 ]);
                 Ok(msg.to_string())
             }
+            "dbfilename" => {
+                let msg = Array(vec![
+                    Entry::Text(self.key.to_string()),
+                    Entry::Text(config.path),
+                ]);
+                Ok(msg.to_string())
+            }
+            _ => Ok(Entry::Nil.to_string()),
+        }
+    }
+}
+
+pub struct SaveCommand;
+
+#[async_trait]
+impl Command for SaveCommand {
+    async fn execute(&self, storage: &dyn Storage) -> Result<String, CommandError> {
+        storage.save().await.map_err(|_| CommandError)?;
+        Ok(Entry::Nil.to_string())
+    }
+}
+
+pub struct KeysCommand {
+    key: String,
+}
+
+#[async_trait]
+impl Command for KeysCommand {
+    async fn execute(&self, storage: &dyn Storage) -> Result<String, CommandError> {
+        match storage.keys(&self.key).await {
             None => Ok(Entry::Nil.to_string()),
+            Some(v) => Ok(Array(v.iter().map(|k| Entry::Text(k.clone())).collect()).to_string()),
         }
     }
 }

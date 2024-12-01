@@ -4,17 +4,17 @@ use crate::resp::*;
 use crate::storage::Storage;
 use pest::Parser;
 use std::sync::Arc;
-use tokio::{net::TcpListener, task};
+use tokio::{net::TcpListener, sync::Mutex, task};
 
 #[derive(Debug, Clone)]
 pub struct ServerError;
 
 pub struct Server {
-    storage: Arc<dyn Storage>,
+    storage: Arc<Mutex<dyn Storage>>,
 }
 
 impl Server {
-    pub fn new(storage: Arc<dyn Storage>) -> Self {
+    pub fn new(storage: Arc<Mutex<dyn Storage>>) -> Self {
         Server { storage }
     }
 
@@ -49,10 +49,12 @@ impl Server {
                             }
                         };
 
-                        let msg = cmd
-                            .execute(storage.as_ref())
-                            .await
-                            .expect("failed executing command");
+                        let msg = {
+                            let storage_guard = storage.lock().await;
+                            cmd.execute(&*storage_guard)
+                                .await
+                                .expect("failed executing command")
+                        };
                         connection
                             .send_response(&msg)
                             .await
