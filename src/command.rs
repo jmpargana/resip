@@ -98,6 +98,11 @@ impl CommandParser {
                 Box::new(KeysCommand { key })
             }
 
+            "INFO" => {
+                // let key = parse_arg(args, 1)?;
+                Box::new(InfoCommand {})
+            }
+
             _ => return Err(CommandError), // Unknown command
         };
 
@@ -216,5 +221,16 @@ impl Command for KeysCommand {
             None => Ok(Entry::Nil.to_string()),
             Some(v) => Ok(Array(v.iter().map(|k| Entry::Text(k.clone())).collect()).to_string()),
         }
+    }
+}
+
+pub struct InfoCommand {
+    // key: String,
+}
+
+#[async_trait]
+impl Command for InfoCommand {
+    async fn execute(&self, _storage: &dyn Storage) -> Result<String, CommandError> {
+        Ok(Entry::Text("role:master".to_string()).to_string())
     }
 }
